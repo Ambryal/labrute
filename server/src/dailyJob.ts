@@ -13,6 +13,7 @@ import {
   getWinsNeededToRankUp,
   GlobalTournamentGoldReward,
   GlobalTournamentXpReward,
+  knownIssues,
   LAST_RELEASE,
   randomBetween,
   weightedRandom,
@@ -1137,20 +1138,25 @@ const cleanup = async (prisma: PrismaClient) => {
     },
   });
 
-  // Fight deletion is disabled since it times out the job
-  const now = moment.utc().valueOf();
-
   // Delete non tournament/war or favorited fights older than 30 days
-  const fights = await prisma.$executeRaw`
-      DELETE FROM "Fight"
-      WHERE "date" < ${moment.utc().subtract(30, 'day').toDate()}
-      AND "tournamentId" IS NULL
-      AND "clanWarId" IS NULL
-      AND "favoriteCount" = 0;
-    `;
+  let deleted = null;
 
-  if (fights) {
-    LOGGER.log(`${moment.utc().valueOf() - now}ms to delete ${fights} fights older than 30 days`);
+  while (deleted !== 0) {
+    const now = moment.utc().valueOf();
+
+    deleted = await prisma.$executeRaw`
+        DELETE FROM "Fight"
+        WHERE id IN (SELECT id FROM "Fight"
+          WHERE "date" < ${moment.utc().subtract(30, 'day').toDate()}
+          AND "tournamentId" IS NULL
+          AND "clanWarId" IS NULL
+          AND "favoriteCount" = 0
+          LIMIT 100000);
+      `;
+
+    if (deleted) {
+      LOGGER.log(`${moment.utc().valueOf() - now}ms to delete ${deleted} fights older than 30 days`);
+    }
   }
 };
 
@@ -1938,6 +1944,9 @@ const dailyJob = (prisma: PrismaClient) => async () => {
 
     // Clean up DB
     await cleanup(prisma);
+
+    // Update known issues
+    await DISCORD.updateKnownIssues(knownIssues);
 
     LOGGER.info('Daily job completed');
   } catch (error: unknown) {
